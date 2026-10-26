@@ -355,6 +355,39 @@ impl MtmdContext {
     }
 }
 
+impl MtmdContext {
+    /// Encodes a media chunk and copies out its embeddings: one row of `n_embd_inp` values per
+    /// token of the chunk, in order, ready to be added to an extended batch in the chunk's place.
+    /// `n_embd_inp` is the text model's input width ([`LlamaModel::n_embd_inp`]).
+    ///
+    /// The rows are returned by value because llama.cpp keeps only the last encoded chunk's
+    /// output; a borrowed view would read whichever chunk was encoded after it.
+    ///
+    /// # Errors
+    ///
+    /// [`MtmdEncodeError::TextChunk`] for a text chunk, whose rows are its tokens;
+    /// [`MtmdEncodeError::EncodeFailure`] if encoding fails; [`MtmdEncodeError::OutputAbsent`] if
+    /// the encoder produced no output.
+    pub fn encode_chunk_rows(
+        &mut self,
+        chunk: &MtmdInputChunk<'_>,
+        n_embd_inp: usize,
+    ) -> Result<Vec<f32>, MtmdEncodeError> {
+        if chunk.chunk_type() == MtmdInputChunkType::Text {
+            return Err(MtmdEncodeError::TextChunk);
+        }
+        self.encode_chunk(chunk)?;
+        let output = unsafe { llama_cpp_sys_2::mtmd_get_output_embd(self.context.as_mut_ptr()) };
+        if output.is_null() {
+            return Err(MtmdEncodeError::OutputAbsent);
+        }
+        let len = chunk.n_tokens() * n_embd_inp;
+        // SAFETY: llama.cpp sizes the last encode's output at `n_embd_inp * n_tokens` floats
+        // (mtmd.h, `mtmd_get_output_embd`), and nothing encodes between the call and this copy.
+        Ok(unsafe { slice::from_raw_parts(output, len) }.to_vec())
+    }
+}
+
 impl Drop for MtmdContext {
     fn drop(&mut self) {
         unsafe { llama_cpp_sys_2::mtmd_free(self.context.as_mut_ptr()) }
@@ -1029,6 +1062,12 @@ pub enum MtmdEncodeError {
     /// Encode operation failed
     #[error("Encode failed with code: {0}")]
     EncodeFailure(i32),
+    /// A text chunk has no encoder output; its rows are its tokens.
+    #[error("A text chunk has no encoder output")]
+    TextChunk,
+    /// The encoder produced no output embeddings.
+    #[error("The encoder produced no output embeddings")]
+    OutputAbsent,
 }
 
 /// Errors that can occur during evaluation

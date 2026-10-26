@@ -173,6 +173,13 @@ impl LlamaModel {
         unsafe { llama_cpp_sys_2::llama_n_embd(self.model.as_ptr()) }
     }
 
+    /// The model's *input* embedding width (`n_embd_inp`): the width of an embedding row a
+    /// batch feeds in place of a token, such as an encoded image patch.
+    #[must_use]
+    pub fn n_embd_inp(&self) -> c_int {
+        unsafe { llama_cpp_sys_2::llama_model_n_embd_inp(self.model.as_ptr()) }
+    }
+
     /// The model's *output* embedding width (`n_embd_out`). This is the width
     /// llama.cpp actually extracts embeddings at — `n_embd` and `n_embd_out`
     /// diverge when `{arch}.embedding_length_out` is present (deepstack models

@@ -28,6 +28,7 @@ pub mod context;
 pub mod gguf;
 pub mod llama_backend;
 pub mod llama_batch;
+pub mod llama_batch_ext;
 #[cfg(feature = "llguidance")]
 pub(crate) mod llguidance_sampler;
 mod log;
@@ -177,6 +178,20 @@ pub enum EncodeError {
     /// An unknown error occurred.
     #[error("Encode Error {0}: unknown")]
     Unknown(c_int),
+}
+
+/// Processing an extended batch failed.
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ProcessError {
+    /// The batch was built for another context.
+    #[error("the extended batch was built for another context")]
+    OtherContext,
+    /// Encoding failed.
+    #[error(transparent)]
+    Encode(#[from] EncodeError),
+    /// Decoding failed.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 }
 
 /// Fetching embeddings failed.

@@ -7,6 +7,7 @@ use std::num::NonZeroI32;
 use std::slice;
 
 use crate::llama_batch::LlamaBatch;
+use crate::llama_batch_ext::LlamaBatchExt;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
 use crate::ptr::Ptr;
 use crate::sampling::LlamaSampler;
@@ -16,8 +17,17 @@ use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
 use crate::{
     DecodeError, EmbeddingsError, EmbeddingsSeqError, EncodeError, LlamaLoraAdapterRemoveError,
-    LlamaLoraAdapterSetError,
+    LlamaLoraAdapterSetError, ProcessError,
 };
+
+/// How [`LlamaContext::process`] runs an extended batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessKind {
+    /// Without the KV cache, as [`LlamaContext::encode`].
+    Encode,
+    /// Through the KV cache, as [`LlamaContext::decode`].
+    Decode,
+}
 
 pub mod kv_cache;
 pub mod params;
@@ -131,6 +141,35 @@ impl<'model> LlamaContext<'model> {
         match NonZeroI32::new(result) {
             None => Ok(()),
             Some(error) => Err(EncodeError::from(error)),
+        }
+    }
+
+    /// Processes an extended batch, whose rows may mix token ids and input embeddings. Every
+    /// row of one sequence is seen by one call, so its pooled embedding covers all of them.
+    ///
+    /// # Errors
+    ///
+    /// [`ProcessError::OtherContext`] if the batch was built for another context; else the
+    /// encode or decode error llama.cpp returned.
+    pub fn process(
+        &mut self,
+        kind: ProcessKind,
+        batch: &mut LlamaBatchExt,
+    ) -> Result<(), ProcessError> {
+        if batch.context() != self.context.as_ptr() {
+            return Err(ProcessError::OtherContext);
+        }
+        let process = match kind {
+            ProcessKind::Encode => llama_cpp_sys_2::LLAMA_PROCESS_TYPE_ENCODE,
+            ProcessKind::Decode => llama_cpp_sys_2::LLAMA_PROCESS_TYPE_DECODE,
+        };
+        let result = unsafe {
+            llama_cpp_sys_2::llama_process(self.context.as_mut_ptr(), process, batch.as_mut_ptr())
+        };
+        match (kind, NonZeroI32::new(result)) {
+            (_, None) => Ok(()),
+            (ProcessKind::Encode, Some(error)) => Err(EncodeError::from(error).into()),
+            (ProcessKind::Decode, Some(error)) => Err(DecodeError::from(error).into()),
         }
     }
 
